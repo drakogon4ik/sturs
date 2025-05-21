@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Search</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            width: 70%;
+            max-width: 800px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .search-form {
+            display: flex;
+            margin-bottom: 20px;
+        }
+
+        .search-form input[type="text"] {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px 0 0 4px;
+            font-size: 16px;
+        }
+
+        .search-form button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 0 4px 4px 0;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .search-form button:hover {
+            background-color: #45a049;
+        }
+
+        .streamers-list {
+            margin-bottom: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .streamer-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .streamer-item:last-child {
+            border-bottom: none;
+        }
+
+        .streamer-name {
+            font-weight: bold;
+        }
+
+        .join-button {
+            background-color: #2196F3;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .join-button:hover {
+            background-color: #0b7dda;
+        }
+
+        .stream-window {
+            background-color: #000;
+            height: 400px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .stream-window img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        .stream-window .status {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+
+        .audio-controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .audio-controls .volume-control {
+            display: flex;
+            align-items: center;
+        }
+
+        .audio-controls label {
+            margin-right: 10px;
+        }
+
+        .audio-controls input[type="range"] {
+            width: 100px;
+        }
+
+        .audio-controls .mute-button {
+            background-color: #f44336;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .audio-controls .mute-button.unmuted {
+            background-color: #2196F3;
+        }
+
+        .actions {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+
+        .button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            text-align: center;
+            width: 50%;
+            margin: 0 auto;
+        }
+
+        .button:hover {
+            background-color: #45a049;
+        }
+
+        .return-button {
+            background-color: #f44336;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        .return-button:hover {
+            background-color: #d32f2f;
+        }
+
+        #search-interface, #stream-interface {
+            width: 100%;
+        }
+
+        #stream-interface {
+            display: none;
+        }
+
+        .streamer-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .streamer-info h2 {
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="search-interface">
+            <h1>Stream Search</h1>
+
+            <form class="search-form">
+                <input type="text" placeholder="Enter streamer name..." id="streamer-search">
+                <button type="submit">Search</button>
+            </form>
+
+            <div class="streamers-list">
+                <!-- Streamers will be displayed here -->
+                <div class="streamer-item">
+                    <span class="streamer-name">Streamer1</span>
+                    <button class="join-button">Join</button>
+                </div>
+                <div class="streamer-item">
+                    <span class="streamer-name">Streamer2</span>
+                    <button class="join-button">Join</button>
+                </div>
+                <div class="streamer-item">
+                    <span class="streamer-name">Streamer3</span>
+                    <button class="join-button">Join</button>
+                </div>
+            </div>
+
+            <div class="actions">
+                <a href="/profile.html" class="button">Update Profile</a>
+            </div>
+        </div>
+
+        <div id="stream-interface">
+            <div class="streamer-info">
+                <h2>Stream: <span id="streamer-name"></span></h2>
+                <button class="return-button" id="return-button">Return to Search</button>
+            </div>
+
+            <div class="stream-window">
+                <img id="stream-image" src="" alt="Video stream">
+                <div class="status" id="status">Connecting...</div>
+            </div>
+
+            <div class="audio-controls">
+                <div class="volume-control">
+                    <label for="volume-slider">Volume:</label>
+                    <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="0.5">
+                </div>
+                <button class="mute-button unmuted" id="mute-button">Mute</button>
+            </div>
+
+            <audio id="audio-player" style="display: none;"></audio>
+
+            <div class="actions">
+                <a href="/profile.html" class="button">Update Profile</a>
+            </div>
+        </div>
+    </div>
+
+        <script>
+        // WebSocket connection for stream receiving
+        let ws = null;
+
+        // Audio context and variables for audio stream
+        let audioContext = null;
+        let audioSource = null;
+        let audioQueue = [];
+        let audioBuffer = null;
+        let isAudioInitialized = false;
+        let isMuted = false;
+        let audioGainNode = null; // Добавлена переменная, которая отсутствовала
+
+        // Variables for stream activity monitoring
+        let lastDataTimestamp = 0;
+        let activityCheckInterval = null;
+        const INACTIVITY_TIMEOUT = 5000; // 5 seconds without data is considered stream stop
+
+        // Function to check stream activity
+        function checkStreamActivity() {
+            const currentTime = Date.now();
+            // Only check if we have a valid WebSocket connection
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                if (currentTime - lastDataTimestamp > INACTIVITY_TIMEOUT) {
+                    console.log('Stream inactive, no data received');
+                    document.getElementById('status').textContent = 'Stream inactive - waiting for data...';
+
+                    // Try to reconnect instead of immediately returning to search
+                    if (currentTime - lastDataTimestamp > INACTIVITY_TIMEOUT * 2) {
+                        alert('Stream ended - no data received');
+                        clearInterval(activityCheckInterval);
+                        returnToSearch();
+                    }
+                }
+            }
+        }
+
+        // Initialize audio context
+        function initAudioContext() {
+            try {
+                if (!audioContext) {
+                    window.AudioContext = window.AudioContext || window.webkitAudioContext;
+                    audioContext = new AudioContext();
+
+                    // If context is suspended (browser policy), try to resume
+                    if (audioContext.state === 'suspended') {
+                        audioContext.resume();
+                    }
+
+                    // Set up volume
+                    audioGainNode = audioContext.createGain();
+                    audioGainNode.gain.value = document.getElementById('volume-slider').value;
+                    audioGainNode.connect(audioContext.destination);
+
+                    isAudioInitialized = true;
+                    console.log('Audio context initialized');
+                }
+            } catch (error) {
+                console.error('Error initializing audio context:', error);
+            }
+        }
+
+        // Function to process audio data
+        function processAudioData(audioData) {
+            if (!isAudioInitialized) {
+                initAudioContext();
+            }
+
+            if (!isAudioInitialized || isMuted) return;
+
+            // Проверяем состояние контекста и пытаемся восстановить
+            if (audioContext && audioContext.state !== 'running') {
+                console.log('Audio context not running, attempting resume');
+                audioContext.resume().catch(e => console.error('Error resuming audio context:', e));
+            }
+
+            try {
+                // Decode base64 to ArrayBuffer
+                const binary = atob(audioData);
+                const len = binary.length;
+                const buffer = new ArrayBuffer(len);
+                const view = new Uint8Array(buffer);
+
+                for (let i = 0; i < len; i++) {
+                    view[i] = binary.charCodeAt(i);
+                }
+
+                // Assume data is in PCM 16-bit Little Endian format
+                // with sampling rate of 44100Hz and 1 channel (mono)
+                const frameCount = view.length / 2; // 16 bits = 2 bytes per sample
+                const sampleRate = 44100; // Specify correct value from server
+                const audioBuffer = audioContext.createBuffer(1, frameCount, sampleRate);
+                const channelData = audioBuffer.getChannelData(0);
+
+                // Convert Int16 to Float32 (-1.0 to 1.0)
+                for (let i = 0; i < frameCount; i++) {
+                    // Little Endian decoding 16-bit int
+                    const sample = ((view[i*2] & 0xff) | ((view[i*2+1] & 0xff) << 8));
+                    // Convert to signed int16
+                    const signedSample = sample >= 0x8000 ? sample - 0x10000 : sample;
+                    // Normalize to range -1.0...1.0
+                    channelData[i] = signedSample / 32768.0;
+                }
+
+                // Playback
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioGainNode);
+                source.start(0);
+
+                // Save for possible disconnection later
+                audioSource = source;
+
+            } catch (error) {
+                console.error('Error processing audio data:', error);
+            }
+        }
+
+
+        // Function to connect to stream via WebSocket
+        function connectToStream(streamerName) {
+            // Close previous connection if exists
+            if (ws) {
+                ws.close();
+            }
+
+            const host = window.location.hostname;
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsPath = '/ws-proxy';
+
+            // Define WebSocket URL based on the protocol
+            let wsUrl;
+            if (window.location.protocol === 'https:') {
+                // For HTTPS pages, use the same port or the dedicated secure WebSocket port
+                wsUrl = `${wsProtocol}//${host}${wsPath}?streamer=${encodeURIComponent(streamerName)}`;
+            } else {
+                // For HTTP, we have two options:
+                // 1. Use the dedicated WebSocket port
+                // 2. Use the WebSocket proxy through the HTTP server
+
+                // First try with WebSocket proxy through current port
+                wsUrl = `${wsProtocol}//${host}${wsPath}?streamer=${encodeURIComponent(streamerName)}`;
+            }
+
+            console.log(`Connecting to WebSocket: ${wsUrl}`);
+
+            try {
+                // Create WebSocket connection
+                ws = new WebSocket(wsUrl);
+
+                // Setup connection handlers
+                setupWebSocketHandlers(ws, streamerName);
+
+                // Add error fallback for HTTP connections
+                if (window.location.protocol === 'http:') {
+                    ws.addEventListener('error', (error) => {
+                        console.warn('Error with primary WebSocket connection, trying fallback port');
+
+                        // Try fallback to explicit non-SSL WebSocket port (ws_port + 1)
+                        const fallbackPort = 8766; // ws_port + 1 (assuming default ws_port is 8765)
+                        const fallbackUrl = `ws://${host}:${fallbackPort}${wsPath}?streamer=${encodeURIComponent(streamerName)}`;
+
+                        console.log(`Connecting to fallback WebSocket: ${fallbackUrl}`);
+                        ws = new WebSocket(fallbackUrl);
+                        setupWebSocketHandlers(ws, streamerName);
+                    }, { once: true });
+                }
+
+                return true;
+            } catch (err) {
+                console.error('Error creating WebSocket connection:', err);
+                document.getElementById('status').textContent = 'Failed to connect';
+                return false;
+            }
+        }
+
+        // Function to set up WebSocket handlers
+        function setupWebSocketHandlers(websocket, streamerName) {
+            // Connection open handler
+            websocket.onopen = function() {
+                console.log(`WebSocket connection established for ${streamerName}`);
+                document.getElementById('status').textContent = `Connected to ${streamerName}'s stream`;
+
+                // Send streamer name after connection is established
+                const initMessage = JSON.stringify({
+                    action: 'join',
+                    streamer: streamerName
+                });
+                websocket.send(initMessage);
+                console.log('Sent join message:', initMessage);
+
+                // Initialize audio on connection
+                initAudioContext();
+            };
+
+            // Message handler
+            websocket.onmessage = function(evt) {
+                try {
+                    // Update last data timestamp
+                    lastDataTimestamp = Date.now();
+
+                    // Try parsing as JSON
+                    let message;
+                    try {
+                        message = JSON.parse(evt.data);
+                    } catch (jsonError) {
+                        console.error('Failed to parse message as JSON:', jsonError, evt.data);
+                        return;
+                    }
+
+                    console.log('Message received, type:', message.type);
+
+                    switch (message.type) {
+                        case 'video':
+                            // Update image on page
+                            const videoElement = document.getElementById('stream-image');
+                            if (videoElement && message.data) {
+                                videoElement.src = `data:image/jpeg;base64,${message.data}`;
+                                document.getElementById('status').textContent = 'Streaming...';
+                            } else {
+                                console.error('Video element not found or empty data');
+                            }
+                            break;
+
+                        case 'audio':
+                            // Process audio data
+                            if (message.data) {
+                                processAudioData(message.data);
+                            } else {
+                                console.error('Empty audio data received');
+                            }
+                            break;
+
+                        case 'audio_init':
+                            // Initialize audio context when server signals it's ready
+                            console.log('Audio initialization signal received');
+                            initAudioContext();
+                            document.getElementById('status').textContent = 'Audio initialized';
+                            break;
+
+                        case 'info':
+                            console.log(message.message);
+                            document.getElementById('status').textContent = message.message;
+                            break;
+
+                        case 'error':
+                            console.error(message.message);
+                            document.getElementById('status').textContent = `Error: ${message.message}`;
+                            break;
+
+                        default:
+                            console.log('Unknown message received:', message);
+                    }
+                } catch (error) {
+                    console.error('Error processing message:', error, evt.data);
+                }
+            };
+
+            // Error handler
+            websocket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                document.getElementById('status').textContent = 'Connection error';
+            };
+
+            // Connection close handler
+            websocket.onclose = function(event) {
+                console.log(`WebSocket connection closed: ${event.code} ${event.reason}`);
+                document.getElementById('status').textContent = 'Connection closed';
+
+                // Don't automatically return to search if connection was closed unexpectedly
+                if (event.code !== 1000) {
+                    console.log('Unexpected connection close');
+                }
+            };
+
+            // Periodically send ping to keep connection alive
+            const pingInterval = setInterval(() => {
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    websocket.send(JSON.stringify({ action: 'ping' }));
+                } else {
+                    clearInterval(pingInterval);
+                }
+            }, 30000);
+        }
+
+        // Function to handle search result and start stream
+        function joinStream(streamerName) {
+            // Show stream interface immediately
+            document.getElementById('search-interface').style.display = 'none';
+            document.getElementById('stream-interface').style.display = 'block';
+            document.getElementById('streamer-name').textContent = streamerName;
+            document.getElementById('status').textContent = 'Connecting...';
+
+            // Initialize activity checking
+            lastDataTimestamp = Date.now();
+            if (activityCheckInterval) {
+                clearInterval(activityCheckInterval);
+            }
+            activityCheckInterval = setInterval(checkStreamActivity, 2000);
+
+            // Убедимся, что аудиоконтекст сброшен перед подключением
+            if (audioContext) {
+                audioContext.close().then(() => {
+                    audioContext = null;
+                    isAudioInitialized = false;
+                    console.log('Audio context reset before new connection');
+                    // Продолжаем проверку и подключение после сброса аудио
+                    checkAndConnectToStream(streamerName);
+                }).catch(e => {
+                    console.error('Error closing audio context:', e);
+                    // В случае ошибки всё равно продолжаем
+                    checkAndConnectToStream(streamerName);
+                });
+            } else {
+                // Если контекста нет, сразу проверяем и подключаемся
+                checkAndConnectToStream(streamerName);
+            }
+        }
+
+        // Function to return to search
+        function returnToSearch() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+
+            // Stop activity checking
+            if (activityCheckInterval) {
+                clearInterval(activityCheckInterval);
+                activityCheckInterval = null;
+            }
+
+            // Clean up audio resources
+            if (audioContext && audioSource) {
+                try {
+                    audioSource.stop();
+                    audioSource = null;
+                } catch (e) {
+                    // Ignore errors if source is already stopped
+                }
+            }
+
+            // Полностью закрыть и сбросить аудиоконтекст
+            if (audioContext) {
+                audioContext.close().then(() => {
+                    audioContext = null;
+                    isAudioInitialized = false;
+                    console.log('Audio context closed and reset');
+                }).catch(e => console.error('Error closing audio context:', e));
+            }
+
+            // Clear queue
+            audioQueue = [];
+
+            document.getElementById('stream-interface').style.display = 'none';
+            document.getElementById('search-interface').style.display = 'block';
+        }
+
+        function checkAndConnectToStream(streamerName) {
+            // Check stream availability via HTTPS fetch first
+            fetch(`/join-stream?streamer=${encodeURIComponent(streamerName)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (!data.active || !data.exists) {
+                        alert(data.exists ? 'Stream is not active' : 'User does not exist');
+                        // Return to search if stream is unavailable
+                        returnToSearch();
+                        return false;
+                    }
+
+                    // Now connect to stream via WebSocket if stream is available
+                    console.log('Stream available, connecting to WebSocket');
+                    return connectToStream(streamerName);
+                })
+                .catch(error => {
+                    console.error('Error checking stream availability:', error);
+                    document.getElementById('status').textContent = 'Failed to check stream availability';
+
+                    // Try connecting anyway - the server might still accept the WebSocket connection
+                    return connectToStream(streamerName);
+                });
+        }
+
+        // Function to search streamers
+        document.querySelector('.search-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const searchTerm = document.getElementById('streamer-search').value;
+
+            // Send request to server
+            fetch(`/search?term=${encodeURIComponent(searchTerm)}`)
+                .then(response => response.json())
+                .then(data => {
+                    const streamersListElement = document.querySelector('.streamers-list');
+                    streamersListElement.innerHTML = '';
+
+                    if (data.length === 0) {
+                        streamersListElement.innerHTML = '<div class="streamer-item">No streamers found</div>';
+                    } else {
+                        data.forEach(streamer => {
+                            const streamerItem = document.createElement('div');
+                            streamerItem.className = 'streamer-item';
+
+                            const nameSpan = document.createElement('span');
+                            nameSpan.className = 'streamer-name';
+                            nameSpan.textContent = streamer;
+
+                            const joinButton = document.createElement('button');
+                            joinButton.className = 'join-button';
+                            joinButton.textContent = 'Join';
+                            joinButton.addEventListener('click', function() {
+                                joinStream(streamer);
+                            });
+
+                            streamerItem.appendChild(nameSpan);
+                            streamerItem.appendChild(joinButton);
+                            streamersListElement.appendChild(streamerItem);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Search error:', error);
+                    alert('An error occurred during search. Please try again later.');
+                });
+        });
+
+        // Initialize join buttons on page load
+        document.querySelectorAll('.join-button').forEach(button => {
+            button.addEventListener('click', function() {
+                const streamerName = this.parentElement.querySelector('.streamer-name').textContent;
+                joinStream(streamerName);
+            });
+        });
+
+        // Return to search handler
+        document.getElementById('return-button').addEventListener('click', function() {
+            returnToSearch();
+        });
+
+        // Function to check connection state and reconnect if necessary
+        function checkConnection(streamerName) {
+            if (ws && ws.readyState !== WebSocket.OPEN) {
+                document.getElementById('status').textContent = 'Reconnecting...';
+                connectToStream(streamerName);
+            }
+        }
+
+        // Handler for reconnecting after losing connection
+        window.addEventListener('online', function() {
+            const streamerName = document.getElementById('streamer-name').textContent;
+            if (streamerName && document.getElementById('stream-interface').style.display !== 'none') {
+                checkConnection(streamerName);
+            }
+        });
+
+        // Volume change handler
+        document.getElementById('volume-slider').addEventListener('input', function(event) {
+            if (audioGainNode) {
+                audioGainNode.gain.value = parseFloat(event.target.value);
+            }
+        });
+
+        // Mute button handler
+        document.getElementById('mute-button').addEventListener('click', function() {
+            const muteButton = document.getElementById('mute-button');
+
+            isMuted = !isMuted;
+
+            if (audioGainNode) {
+                audioGainNode.gain.value = isMuted ? 0 : document.getElementById('volume-slider').value;
+            }
+
+            if (isMuted) {
+                muteButton.textContent = 'Unmute';
+                muteButton.classList.remove('unmuted');
+            } else {
+                muteButton.textContent = 'Mute';
+                muteButton.classList.add('unmuted');
+            }
+        });
+
+        // Initialize audio context on user click
+        // (necessary for browsers requiring user interaction)
+        document.addEventListener('click', function() {
+            if (!isAudioInitialized) {
+                initAudioContext();
+            }
+
+            // If context exists and is suspended, resume it
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+        }, { once: true });
+    </script>
+</body>
+</html>
