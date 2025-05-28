@@ -10,6 +10,7 @@ import PIL.Image, PIL.ImageTk
 from protocol import StreamProtocol, AuthProtocol
 import ssl
 
+
 # Server settings
 SERVER_IP = "127.0.0.1"
 SERVER_AUTH_PORT = 5050  # TCP port for authentication
@@ -261,50 +262,123 @@ class StreamerApp:
             return
 
         try:
+            print("Starting streaming process...")
+
             # Update UI
             self.stream_status_var.set(f"Connected as: {self.username} | Port: {self.udp_port}")
             self.show_stream_frame()
 
             # Create UDP socket for streaming
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            print("UDP socket created")
 
-            # Initialize video capture
-            self.cap = cv2.VideoCapture(0)
+            # Initialize video capture with explicit backend on Windows
+            import platform
+            if platform.system() == "Windows":
+                print("Windows detected, using DirectShow backend")
+                self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            else:
+                print("Non-Windows system, using default backend")
+                self.cap = cv2.VideoCapture(0)
+
+            # Check if camera opened
+            if not self.cap.isOpened():
+                print("ERROR: Camera failed to open")
+                messagebox.showerror("Error", "Failed to open camera")
+                return
+
+            print("Camera opened successfully")
+
+            # Set camera properties
+            print("Setting camera properties...")
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+            # Verify properties were set
+            actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            actual_fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+            print(f"Camera resolution: {actual_width}x{actual_height} @ {actual_fps}fps")
+
+            # Test reading a frame
+            print("Testing frame capture...")
+            ret, test_frame = self.cap.read()
+            if not ret:
+                print("ERROR: Cannot read frame from camera")
+                messagebox.showerror("Error", "Camera opened but cannot read frames")
+                return
+
+            if test_frame is None:
+                print("ERROR: Frame is None")
+                messagebox.showerror("Error", "Camera returned empty frame")
+                return
+
+            print(f"Test frame captured successfully: {test_frame.shape}")
+            print(f"Frame mean brightness: {test_frame.mean()}")
+
+            # Check if frame is completely black
+            if test_frame.mean() < 1.0:
+                print("WARNING: Frame appears to be completely black")
 
             # Set running state
             self.running = True
+            print("Setting running state to True")
 
             # Start audio streaming thread
+            print("Starting audio thread...")
             audio_thread = threading.Thread(target=self.send_audio, daemon=True)
             audio_thread.start()
 
             # Start video streaming
+            print("Starting video update loop...")
             self.update_video()
+            print("update_video() called")
 
         except Exception as e:
+            print(f"ERROR in start_streaming: {str(e)}")
+            import traceback
+            traceback.print_exc()
             messagebox.showerror("Error", f"Failed to start streaming: {str(e)}")
             self.stop_streaming()
 
     def update_video(self):
-        """Update video frame and send to server"""
+        """Update video frame and send to server with debugging"""
+        print(f"update_video called - running: {self.running}, cap: {self.cap is not None}")
+
         if not self.running or not self.cap:
+            print("Exiting update_video - not running or no camera")
             return
 
-        ret, frame = self.cap.read()
-        if ret:
+        try:
+            print("Attempting to read frame...")
+            ret, frame = self.cap.read()
+            print(f"Frame read result: ret={ret}, frame is None={frame is None}")
+
+            if not ret or frame is None:
+                print("Failed to read frame, retrying in 100ms...")
+                if self.running:
+                    self.root.after(100, self.update_video)
+                return
+
+            print(f"Frame captured: {frame.shape}, mean: {frame.mean()}")
+
             # Display the frame locally
+            print("Converting frame for display...")
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = PIL.Image.fromarray(frame_rgb)
             imgtk = PIL.ImageTk.PhotoImage(image=img)
 
             # Keep a reference to prevent garbage collection
             self.current_image = imgtk
+            self.canvas.delete("all")
             self.canvas.create_image(0, 0, anchor=tk.NW, image=imgtk)
+            print("Frame displayed on canvas")
 
             # Send frame to server
             try:
+                print("Encoding and sending frame...")
                 frame_bytes = stream_protocol.encode_video_frame(frame, quality=80)
                 video_fragments = stream_protocol.fragment_data("V", frame_bytes)
                 server_ip = self.server_ip_var.get()
@@ -313,26 +387,51 @@ class StreamerApp:
                     video_fragments,
                     (server_ip, self.udp_port)
                 )
+                print(f"Frame sent: {len(frame_bytes)} bytes, {len(video_fragments)} fragments")
 
-                # Update status periodically (not every frame to avoid UI lag)
-                if self.running and time.time() % 5 < 0.1:
+                # Update status periodically
+                current_time = time.time()
+                if not hasattr(self, 'last_status_update'):
+                    self.last_status_update = 0
+
+                if current_time - self.last_status_update > 2:  # Update every 2 seconds
                     self.stream_status_var.set(f"Connected as: {self.username} | Sending: {len(frame_bytes)} bytes")
+                    self.last_status_update = current_time
 
             except Exception as e:
                 print(f"Error sending video: {e}")
+                import traceback
+                traceback.print_exc()
 
-        # Schedule next frame update (30 fps = ~33ms)
+        except Exception as e:
+            print(f"Error in update_video: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Schedule next frame update
         if self.running:
-            self.root.after(33, self.update_video)
+            print("Scheduling next frame...")
+            self.root.after(33, self.update_video)  # ~30fps
+        else:
+            print("Not scheduling next frame - not running")
 
     def send_audio(self):
-        """Send audio stream to server"""
+        """Send audio stream to server with debugging"""
+        print("Audio thread started")
         try:
+            print("Opening audio input stream...")
             with sd.InputStream(samplerate=AUDIO_RATE, channels=AUDIO_CHANNELS, dtype=AUDIO_DTYPE) as stream:
+                print("Audio stream opened successfully")
+                audio_frame_count = 0
                 while self.running:
                     audio_data, overflowed = stream.read(AUDIO_CHUNK)
                     if overflowed:
+                        print("Audio buffer overflow detected")
                         continue
+
+                    audio_frame_count += 1
+                    if audio_frame_count % 100 == 0:  # Log every 100 audio frames
+                        print(f"Audio frames sent: {audio_frame_count}")
 
                     # Use protocol for fragmentation and sending audio
                     server_ip = self.server_ip_var.get()
@@ -345,21 +444,30 @@ class StreamerApp:
 
                     # Sleep to prevent CPU overuse
                     time.sleep(0.01)
+
         except Exception as e:
+            print(f"Audio error: {str(e)}")
+            import traceback
+            traceback.print_exc()
             if self.running:  # Only show error if we're still supposed to be running
                 self.root.after(0, lambda: messagebox.showerror("Audio Error", f"Audio stream error: {str(e)}"))
                 self.root.after(0, self.stop_streaming)
 
+        print("Audio thread ended")
+
     def stop_streaming(self):
         """Stop streaming and return to login screen"""
+        print("Stopping streaming...")
         self.running = False
 
         # Clean up resources
         if self.cap:
+            print("Releasing camera...")
             self.cap.release()
             self.cap = None
 
         if self.client_socket:
+            print("Closing socket...")
             self.client_socket.close()
             self.client_socket = None
 
@@ -372,6 +480,7 @@ class StreamerApp:
         self.show_login_frame()
         self.login_button.config(state=tk.NORMAL)
         self.status_var.set("Enter your credentials to start streaming")
+        print("Streaming stopped, returned to login screen")
 
     def on_closing(self):
         """Handle window close event"""
