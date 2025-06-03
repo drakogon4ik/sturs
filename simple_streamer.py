@@ -1,6 +1,6 @@
 """
 Author: Oleg Shkolnik
-Class: יב12
+Class: יב9
 Description: application for streamer that gives him to choose ip and port streamer wants to connect, 
              authenticate and start streaming.
 Date: 3/06/25
