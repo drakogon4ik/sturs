@@ -1,9 +1,13 @@
-
 """
-Author: Oleg Shkolnik יא9. (with additions)
-Description: Server that receives GET and POST requests from client (site)
-             and sends appropriate responses with user authentication support.
-Date: 11/01/24
+Author: Oleg Shkolnik
+Description: before running the server it's importnant to download ssl from the site https://slproweb.com/products/Win32OpenSSL.html
+            and then write this command in the powershell
+            & "C:\Program Files\OpenSSL-Win64\bin\openssl.exe" req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"
+            Server that receives GET and POST requests from client (site)
+            and sends appropriate responses with user authentication support.
+            Server works with streamer and viewers - recieve stream and resend it to the viewers. 
+            It includes different servers for the correct work including udp, tcp, websocket.
+Date: 3/06/25
 """
 
 import socket
@@ -25,20 +29,20 @@ import base64
 import datetime
 from protocol import StreamProtocol, AuthProtocol
 import ssl
+import logging
 
 # Storage for WebSocket connections
 ws_clients = {}
-loop = asyncio.get_event_loop()
 
 HOST = '0.0.0.0'
 PORT = 80
 
-HTTPS_PORT = 443  # Стандартный порт для HTTPS
-SSL_CERT_FILE = 'server.crt'  # Путь к сертификату
-SSL_KEY_FILE = 'server.key'  # Путь к приватному ключу
+HTTPS_PORT = 443  # Standard port for HTTPS
+SSL_CERT_FILE = 'server.crt'  # Path to certificate
+SSL_KEY_FILE = 'server.key'  # Path to private key
 
-TCP_AUTH_SSL = True  # Флаг для включения/отключения SSL
-AUTH_SSL_CERT_FILE = 'server.crt'  # Путь к сертификату SSL
+TCP_AUTH_SSL = True  # Flag to enable/disable SSL
+AUTH_SSL_CERT_FILE = 'server.crt'  # Path to SSL certificate
 AUTH_SSL_KEY_FILE = 'server.key'
 
 SITE_FOLDER = 'webroot'
@@ -82,9 +86,47 @@ running = True
 # Queue for broadcast delivery
 broadcast_queue = queue.Queue(maxsize=100)
 
-# Add global variable to track active streamer
+# Global variable to track active streamer
 current_streamer = None
 streamer_disconnected = threading.Event()
+
+
+def setup_logging():
+    """
+    Sets up logging configuration for the server
+    """
+    # Create logs directory if it doesn't exist
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
+
+    # Configure logging format
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+
+    # Set up file handler (logs to file)
+    file_handler = logging.FileHandler(
+        f'logs/server_{datetime.datetime.now().strftime("%Y%m%d")}.log'
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(log_format))
+
+    # Set up console handler (logs to terminal)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(log_format))
+
+    # Create logger
+    log = logging.getLogger('HTTPServer')
+    log.setLevel(logging.DEBUG)
+
+    # Add handlers to logger
+    log.addHandler(file_handler)
+    log.addHandler(console_handler)
+
+    return log
+
+
+# Initialize logger at module level
+logger = setup_logging()
 
 
 class StreamManager:
@@ -94,8 +136,6 @@ class StreamManager:
         self.db_name = db_name
         self.current_streamer = None
         self.streamer_disconnected = threading.Event()
-        self.video_reassembly_buffer = {}
-        self.audio_reassembly_buffer = {}
         self.broadcast_queue = queue.Queue(maxsize=100)
         self.ws_clients = {}
         self.frame = None
@@ -109,10 +149,10 @@ class StreamManager:
             cursor.execute('SELECT * FROM active_streams WHERE username = ?', (username,))
             result = cursor.fetchone() is not None
             conn.close()
-            print(f"Checking stream for {username}: {result}")
+            logger.debug(f"Checking stream for {username}: {result}")
             return result
         except Exception as e:
-            print(f"Error checking stream status: {e}")
+            logger.error(f"Error checking stream status: {e}")
             return False
 
     def add_user_to_active_streams(self, username):
@@ -125,9 +165,9 @@ class StreamManager:
             cursor.execute("INSERT INTO active_streams (username, start_time) VALUES (?, ?)",
                            (username, datetime.datetime.now()))
             conn.commit()
-            print(f"User {username} added to active streams")
+            logger.info(f"User {username} added to active streams")
         except sqlite3.Error as e:
-            print(f"Error adding to active streams: {e}")
+            logger.error(f"Error adding to active streams: {e}")
             if conn:
                 conn.rollback()
         finally:
@@ -141,15 +181,13 @@ class StreamManager:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM active_streams WHERE username = ?", (username,))
             conn.commit()
-            print(f"User {username} removed from active streams")
+            logger.info(f"User {username} removed from active streams")
             conn.close()
         except sqlite3.Error as e:
-            print(f"Error removing from active streams: {e}")
+            logger.error(f"Error removing from active streams: {e}")
 
     def cleanup_after_streamer(self):
         """Cleanup after streamer disconnection"""
-        self.video_reassembly_buffer.clear()
-        self.audio_reassembly_buffer.clear()
 
         # Clear broadcast queue
         while not self.broadcast_queue.empty():
@@ -174,7 +212,7 @@ class StreamManager:
                         loop
                     )
                 except Exception as e:
-                    print(f"Error sending notification: {e}")
+                    logger.error(f"Error sending notification: {e}")
 
         self.current_streamer = None
 
@@ -234,7 +272,7 @@ class SessionManager:
 
             return user is not None
         except Exception as e:
-            print(f"Error authenticating user: {e}")
+            logger.error(f"Error authenticating user: {e}")
             return False
 
     def register_user(self, username, password):
@@ -248,14 +286,14 @@ class SessionManager:
                 conn.close()
                 return False
 
-            hashed_password = hashlib.sha256(password.encode()).hexdigest()
+            hashed_password = hash_password(password)
             cursor.execute('INSERT INTO users (username, password) VALUES (?, ?)',
                            (username, hashed_password))
             conn.commit()
             conn.close()
             return True
         except Exception as e:
-            print(f"Error registering user: {e}")
+            logger.error(f"Error registering user: {e}")
             return False
 
 
@@ -266,14 +304,14 @@ stream_protocol = StreamProtocol()
 
 
 def create_ssl_context():
-    """Создает и настраивает SSL контекст для аутентификации"""
+    """Creates and configures SSL context for authentication"""
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     try:
         ssl_context.load_cert_chain(certfile=AUTH_SSL_CERT_FILE, keyfile=AUTH_SSL_KEY_FILE)
         return ssl_context
     except Exception as e:
-        print(f"Error setting up SSL for auth server: {e}")
-        print("Running auth server without SSL")
+        logger.error(f"Error setting up SSL for auth server: {e}")
+        logger.warning("Running auth server without SSL")
         return None
 
 
@@ -290,29 +328,29 @@ def auth_server_thread():
     if TCP_AUTH_SSL:
         ssl_context = create_ssl_context()
         if ssl_context:
-            print(f"TCP Authentication server started with SSL on {HOST}:{TCP_AUTH_PORT}")
+            logger.info(f"TCP Authentication server started with SSL on {HOST}:{TCP_AUTH_PORT}")
         else:
-            print(f"TCP Authentication server started without SSL on {HOST}:{TCP_AUTH_PORT}")
+            logger.info(f"TCP Authentication server started without SSL on {HOST}:{TCP_AUTH_PORT}")
     else:
-        print(f"TCP Authentication server started on {HOST}:{TCP_AUTH_PORT}")
+        logger.info(f"TCP Authentication server started on {HOST}:{TCP_AUTH_PORT}")
 
     while running:
         try:
             # Accept connection
             client_socket, addr = tcp_auth_socket.accept()
-            print(f"New auth connection from {addr}")
+            logger.debug(f"New auth connection from {addr}")
 
             # Wrap socket with SSL if enabled
             if TCP_AUTH_SSL and ssl_context:
                 try:
                     client_socket = ssl_context.wrap_socket(client_socket, server_side=True)
-                    print(f"SSL handshake successful with {addr}")
+                    logger.debug(f"SSL handshake successful with {addr}")
                 except ssl.SSLError as e:
-                    print(f"SSL handshake failed with {addr}: {e}")
+                    logger.warning(f"SSL handshake failed with {addr}: {e}")
                     client_socket.close()
                     continue
                 except Exception as e:
-                    print(f"SSL error with {addr}: {e}")
+                    logger.error(f"SSL error with {addr}: {e}")
                     client_socket.close()
                     continue
 
@@ -324,8 +362,8 @@ def auth_server_thread():
             auth_thread.daemon = True
             auth_thread.start()
         except Exception as e:
-            if running:  # Only print error if not shutting down
-                print(f"Error in auth server thread: {e}")
+            if running:  # Only log error if not shutting down
+                logger.error(f"Error in auth server thread: {e}")
 
     tcp_auth_socket.close()
 
@@ -345,10 +383,10 @@ def handle_tcp_authentication(client_socket, addr):
         )
 
         if not username:
-            print(f"Authentication failed for {addr}")
+            logger.warning(f"Authentication failed for {addr}")
             return
 
-        print(f"User {username} successfully authenticated from {addr}")
+        logger.info(f"User {username} successfully authenticated from {addr}")
 
         # Send UDP port for streaming back to the client
         auth_protocol.send_message(client_socket, str(PORT_UDP))
@@ -358,10 +396,10 @@ def handle_tcp_authentication(client_socket, addr):
         stream_manager.add_user_to_active_streams(username)
 
         # Notify current streamer is ready for UDP connection
-        print(f"Streamer {username} authorized and ready to connect via UDP")
+        logger.info(f"Streamer {username} authorized and ready to connect via UDP")
 
     except Exception as e:
-        print(f"Error in TCP authentication handler: {e}")
+        logger.error(f"Error in TCP authentication handler: {e}")
     finally:
         client_socket.close()
 
@@ -370,7 +408,7 @@ def streamer_listener():
     """Main loop waiting for streamer connection"""
     global running, current_streamer, streamer_disconnected
 
-    print("Streamer UDP connection handler started")
+    logger.info("Streamer UDP connection handler started")
 
     while running:
         try:
@@ -392,7 +430,7 @@ def streamer_listener():
                                 loop
                             )
                         except Exception as e:
-                            print(f"Error sending new streamer notification: {e}")
+                            logger.error(f"Error sending new streamer notification: {e}")
 
                 # Wait for disconnect signal to move to next streamer
                 streamer_disconnected.wait()
@@ -409,7 +447,7 @@ def streamer_listener():
                 time.sleep(0.5)
 
         except Exception as e:
-            print(f"Error in streamer processing loop: {e}")
+            logger.error(f"Error in streamer processing loop: {e}")
             time.sleep(1)  # Pause before retry
 
 
@@ -430,7 +468,7 @@ def handle_streamer_udp_connection(username):
     # Create UDP socket for streaming
     udp_socket = AuthProtocol.create_socket(HOST, PORT_UDP, tcp=False)
 
-    print(f"UDP server ready for streamer {username} on {HOST}:{PORT_UDP}")
+    logger.info(f"UDP server ready for streamer {username} on {HOST}:{PORT_UDP}")
 
     # Receive stream from streamer who was already authenticated
     receive_stream_data(udp_socket, username)
@@ -490,21 +528,20 @@ def receive_stream_data(udp_socket, username):
             inactive_time = current_time - last_packet_time
 
             # If no packets for a long time (5 seconds), consider streamer disconnected
-            if disconnect_counter >= 2 or inactive_time > 5:
-                print(f"Streamer {username} disconnected (no data for {inactive_time:.1f} sec)")
+            if disconnect_counter >= 5 or inactive_time > 10:
+                logger.info(f"Streamer {username} disconnected (no data for {inactive_time:.1f} sec)")
                 stream_manager.cleanup_database(username)
                 streamer_disconnected.set()  # Signal for next streamer
                 break
 
         except Exception as e:
-            print(f"Error receiving stream: {e}")
+            logger.error(f"Error receiving stream: {e}")
             # For serious errors, also disconnect streamer
             stream_manager.cleanup_database(username)
             streamer_disconnected.set()
             break
 
 
-# Creating and initializing database
 def init_database():
     """
     Creates SQLite database and necessary tables if they don't exist
@@ -532,7 +569,8 @@ def init_database():
 
     conn.commit()
     conn.close()
-    print("Database initialized")
+    logger.info("Database initialized")
+
 
 def hash_password(password):
     """
@@ -545,7 +583,7 @@ def hash_password(password):
 
 def choosing_type(filename):
     """
-    function for searching type of file
+    Function for searching type of file
     :param filename: file which type we want to know
     :return: type
     """
@@ -557,17 +595,19 @@ def choosing_type(filename):
     else:
         return 'text/plain'
 
+
 def specific(filename):
     """
-    function checks if we have specific url
+    Function checks if we have specific url
     :param filename: specific part
     :return: true or false
     """
     return filename in specific_urls
 
+
 def searching_url(filename):
     """
-    function that determines what response we need to send on specific url
+    Function that determines what response we need to send on specific url
     :param filename: specific url
     :return: specific response
     """
@@ -580,17 +620,19 @@ def searching_url(filename):
         response = b"HTTP/1.1 500 Internal Server Error\r\n\r\n<h1>500 Internal Server Error</h1>"
     return response
 
+
 def validating_get_request(request):
     """
-    function validates if GET request is correct
+    Function validates if GET request is correct
     :param request: GET request in type of list
     :return: true if request is correct and false if not
     """
     return request[0] == "GET" and request[2] == "HTTP/1.1"
 
+
 def validating_post_request(request):
     """
-    function validates if POST request is correct
+    Function validates if POST request is correct
     :param request: POST request in type of list
     :return: true if request is correct and false if not
     """
@@ -637,11 +679,12 @@ def receive_all(sock, def_size=1024):
                     break
 
     except socket.timeout:
-        print("Timeout receiving data from client")
+        logger.warning("Timeout receiving data from client")
     except Exception as e:
-        print(f"Error reading data: {e}")
+        logger.error(f"Error reading data: {e}")
 
     return data
+
 
 def serve_file(client_socket, filename):
     """
@@ -711,7 +754,7 @@ def handle_registration(client_socket, form_data):
         response += b"Content-Length: 0\r\n"
         response += b"Connection: close\r\n\r\n"
         client_socket.sendall(response)
-        print(f"User {username} successfully registered")
+        logger.info(f"User {username} successfully registered")
     else:
         # User already exists
         send_error_page(client_socket, "Username already taken", "register.html", username)
@@ -743,7 +786,7 @@ def handle_login(client_socket, form_data):
         response += b"Content-Length: 0\r\n"
         response += b"Connection: close\r\n\r\n"
         client_socket.sendall(response)
-        print(f"User {username} successfully logged in")
+        logger.info(f"User {username} successfully logged in")
     else:
         # Invalid credentials
         send_error_page(client_socket, "Invalid username or password", "login.html", username)
@@ -799,7 +842,7 @@ def handle_search_request(client_socket, query_params):
     :param query_params: query parameters
     """
     search_term = query_params.get('term', [''])[0].lower()
-    print(f"Searching streamers with term: {search_term}")
+    logger.debug(f"Searching streamers with term: {search_term}")
 
     # Get list of all registered users from database
     conn = sqlite3.connect('user_database.db')
@@ -814,7 +857,6 @@ def handle_search_request(client_socket, query_params):
     matched_users = matched_users[:3]
 
     # Form JSON response
-    import json
     response_data = json.dumps(matched_users).encode('utf-8')
 
     headers = f"HTTP/1.1 200 OK\r\n"
@@ -824,7 +866,8 @@ def handle_search_request(client_socket, query_params):
 
     response = headers.encode('utf-8') + response_data
     client_socket.sendall(response)
-    print(f"Search result sent: {matched_users}")
+    logger.debug(f"Search result sent: {matched_users}")
+
 
 def handle_join_stream_request(client_socket, query_params):
     """
@@ -833,7 +876,7 @@ def handle_join_stream_request(client_socket, query_params):
     :param query_params: query parameters
     """
     streamer_name = query_params.get('streamer', [''])[0]
-    print(f"Request to join stream of user: {streamer_name}")
+    logger.info(f"Request to join stream of user: {streamer_name}")
 
     # Check if user exists
     conn = sqlite3.connect('user_database.db')
@@ -859,7 +902,7 @@ def handle_join_stream_request(client_socket, query_params):
 
     response = headers.encode('utf-8') + response_data
     client_socket.sendall(response)
-    print(f"Stream status sent for {streamer_name}: active = {is_active}, exists = {user_exists}")
+    logger.info(f"Stream status sent for {streamer_name}: active = {is_active}, exists = {user_exists}")
 
 
 def parse_query_string(query_string):
@@ -920,7 +963,7 @@ def parse_post_data(request):
 
         # Check that request body has sufficient length
         if len(body) < content_length:
-            print(f"Warning: received {len(body)} bytes, expected {content_length}")
+            logger.warning(f"Received {len(body)} bytes, expected {content_length}")
 
         # Process data depending on content type
         if content_type and 'application/json' in content_type:
@@ -928,7 +971,7 @@ def parse_post_data(request):
             try:
                 form_data = json.loads(body)
             except json.JSONDecodeError:
-                print("Error parsing JSON data")
+                logger.error("Error parsing JSON data")
         elif content_type and 'application/x-www-form-urlencoded' in content_type:
             # Regular form data
             pairs = body.split('&')
@@ -940,8 +983,9 @@ def parse_post_data(request):
         return form_data
 
     except Exception as e:
-        print(f"Error parsing POST request data: {e}")
+        logger.error(f"Error parsing POST request data: {e}")
         return {}
+
 
 def change_user_password(username, current_password, new_password):
     """
@@ -968,10 +1012,8 @@ def change_user_password(username, current_password, new_password):
 
         return True, "Password changed successfully"
     except Exception as e:
-        print(f"Error changing password: {e}")
+        logger.error(f"Error changing password: {e}")
         return False, "Server error while changing password"
-
-
 
 
 def handle_change_password(client_socket, form_data, request):
@@ -981,10 +1023,10 @@ def handle_change_password(client_socket, form_data, request):
     :param form_data: form data
     :param request: original HTTP request
     """
-    print("Processing password change")
-    print(f"Received form data: {form_data}")
+    logger.info("Processing password change")
+    logger.debug(f"Received form data: {form_data}")
     headers = request.split('\r\n')[:10]
-    print(f"Request headers: {headers}")  # Print the first 10 lines of the request for debugging
+    logger.debug(f"Request headers: {headers}")
 
     # Get cookies from the request
     cookie_header = None
@@ -993,11 +1035,11 @@ def handle_change_password(client_socket, form_data, request):
             cookie_header = line
             break
 
-    print(f"Cookie header: {cookie_header}")
+    logger.debug(f"Cookie header: {cookie_header}")
 
     # Get username from session
     username = session_manager.get_session_user(request)
-    print(f"Extracted username: {username}")
+    logger.debug(f"Extracted username: {username}")
 
     if not username:
         # If username not found, return error
@@ -1029,6 +1071,7 @@ def handle_change_password(client_socket, form_data, request):
         }
         send_json_response(client_socket, error_response, 400)
 
+
 def handle_logout(client_socket, request):
     """
     Processes account logout request
@@ -1048,7 +1091,7 @@ def handle_logout(client_socket, request):
     response += b"Content-Length: 0\r\n"
     response += b"Connection: close\r\n\r\n"
     client_socket.sendall(response)
-    print(f"User logged out and redirected to login page")
+    logger.info("User logged out and redirected to login page")
 
 
 def send_json_response(client_socket, data, status_code=200):
@@ -1081,7 +1124,7 @@ def handle_client_connections():
     """Accept client connections"""
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     client_socket.bind((HOST, PORT_CLIENT))
-    print(f"Client UDP server started on {HOST}:{PORT_CLIENT}")
+    logger.info(f"Client UDP server started on {HOST}:{PORT_CLIENT}")
 
     while running:
         try:
@@ -1093,10 +1136,10 @@ def handle_client_connections():
                 with clients_lock:
                     if client_addr not in clients:
                         clients.append(client_addr)
-                        print(f"New client: {client_addr}")
+                        logger.info(f"New client: {client_addr}")
 
         except Exception as e:
-            print(f"Error accepting clients: {e}")
+            logger.error(f"Error accepting clients: {e}")
 
 
 async def handle_websocket(websocket, path=None):
@@ -1108,7 +1151,7 @@ async def handle_websocket(websocket, path=None):
         if path is None:
             path = websocket.path if hasattr(websocket, 'path') else ""
 
-        print(f"WebSocket connection request received with path: {path}")
+        logger.info(f"WebSocket connection request received with path: {path}")
 
         # Try to extract streamer name from various sources
         try:
@@ -1118,21 +1161,21 @@ async def handle_websocket(websocket, path=None):
                 query_params = parse_query_string(query_string)
                 if 'streamer' in query_params:
                     streamer_name = query_params['streamer'][0]
-                    print(f"Found streamer in URL params: {streamer_name}")
+                    logger.debug(f"Found streamer in URL params: {streamer_name}")
 
             # 2. Try to get from request headers if available
             if not streamer_name and hasattr(websocket, 'request_headers'):
                 headers = websocket.request_headers
                 if 'streamer' in headers:
                     streamer_name = headers['streamer']
-                    print(f"Found streamer in headers: {streamer_name}")
+                    logger.debug(f"Found streamer in headers: {streamer_name}")
 
             # 3. Try to get from path directly if it has a simple format
             if not streamer_name and path.startswith('/ws-proxy/'):
                 potential_streamer = path.split('/ws-proxy/', 1)[1]
                 if potential_streamer:
                     streamer_name = potential_streamer
-                    print(f"Found streamer in path: {streamer_name}")
+                    logger.debug(f"Found streamer in path: {streamer_name}")
 
             # 4. Try to get from initial message (for backward compatibility)
             if not streamer_name:
@@ -1142,16 +1185,13 @@ async def handle_websocket(websocket, path=None):
                     data = json.loads(message)
                     if isinstance(data, dict) and 'action' in data and data['action'] == 'join':
                         streamer_name = data.get('streamer', '')
-                        print(f"Found streamer in initial message: {streamer_name}")
+                        logger.debug(f"Found streamer in initial message: {streamer_name}")
                 except (asyncio.TimeoutError, json.JSONDecodeError) as e:
-                    print(f"No initial message received or error: {e}")
+                    logger.debug(f"No initial message received or error: {e}")
         except Exception as e:
-            print(f"Error extracting streamer name: {e}")
+            logger.error(f"Error extracting streamer name: {e}")
 
-        print(f"WebSocket connection established for stream: {streamer_name}")
-
-        # Check if streamer exists and is active
-        # (You may want to add actual validation logic here)
+        logger.info(f"WebSocket connection established for stream: {streamer_name}")
 
         # Add client to the list for this streamer
         if streamer_name not in ws_clients:
@@ -1160,7 +1200,6 @@ async def handle_websocket(websocket, path=None):
 
         # Send welcome message and audio initialization signal
         await websocket.send(json.dumps({"type": "info", "message": f"Connected to stream of {streamer_name}"}))
-        # Add signal for audio initialization
         await websocket.send(json.dumps({"type": "audio_init", "streamer": streamer_name}))
 
         # Keep connection open
@@ -1176,14 +1215,14 @@ async def handle_websocket(websocket, path=None):
                         # Client requests audio reinitialization
                         await websocket.send(json.dumps({"type": "audio_init", "streamer": streamer_name}))
                 except json.JSONDecodeError as e:
-                    print(f"Invalid JSON received from client: {e}")
+                    logger.warning(f"Invalid JSON received from client: {e}")
                 except Exception as e:
-                    print(f"Error processing client message: {e}")
+                    logger.error(f"Error processing client message: {e}")
 
             except websockets.exceptions.ConnectionClosed:
                 break
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}")
     finally:
         # Remove client on disconnect
         if streamer_name in ws_clients and websocket in ws_clients[streamer_name]:
@@ -1218,7 +1257,7 @@ def broadcast_stream():
                             for fragment in fragments:
                                 udp_socket.sendto(fragment, client)
                         except Exception as e:
-                            print(f"Error sending to UDP client {client}: {e}")
+                            logger.error(f"Error sending to UDP client {client}: {e}")
 
             # WebSocket broadcast
             if ws_clients:  # If there are WebSocket clients
@@ -1238,10 +1277,10 @@ def broadcast_stream():
                             asyncio.run_coroutine_threadsafe(send_ws_message(client, ws_data), loop)
 
                 except Exception as e:
-                    print(f"WebSocket broadcast error: {e}")
+                    logger.error(f"WebSocket broadcast error: {e}")
 
         except Exception as e:
-            print(f"Error in broadcast process: {e}")
+            logger.error(f"Error in broadcast process: {e}")
 
 
 def fragment_data(data_type, payload):
@@ -1317,14 +1356,14 @@ async def send_ws_message(client, message):
         return True
     except websockets.exceptions.ConnectionClosed:
         # Client disconnected
-        print("Client connection closed")
+        logger.debug("Client connection closed")
         return False
     except Exception as e:
-        print(f"Error sending WebSocket message: {e}")
+        logger.error(f"Error sending WebSocket message: {e}")
         return False
 
 
-# Add a broadcast function to send message to all clients for a streamer
+# broadcast function to send message to all clients for a streamer
 async def broadcast_to_streamer_clients(streamer_name, message):
     """
     Broadcast a message to all clients connected to a specific streamer
@@ -1353,7 +1392,6 @@ async def broadcast_to_streamer_clients(streamer_name, message):
         del ws_clients[streamer_name]
 
 
-# Main function for starting WebSocket server
 # Define a flexible WebSocket handler
 async def ws_handler(websocket, path=None):
     try:
@@ -1365,14 +1403,14 @@ async def ws_handler(websocket, path=None):
 
         await handle_websocket(websocket, path)
     except Exception as e:
-        print(f"Error in WebSocket handler: {e}")
+        logger.error(f"Error in WebSocket handler: {e}")
 
 
 async def run_websocket_server():
     global loop
     loop = asyncio.get_event_loop()
     stop = asyncio.Future()
-    print(f"Starting WebSocket server on port {ws_port}")
+    logger.info(f"Starting WebSocket server on port {ws_port}")
 
     # Create SSL context for secure WebSocket connections
     ssl_context = None
@@ -1380,10 +1418,10 @@ async def run_websocket_server():
         try:
             ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             ssl_context.load_cert_chain(certfile=SSL_CERT_FILE, keyfile=SSL_KEY_FILE)
-            print(f"Using SSL for WebSocket server with cert: {SSL_CERT_FILE}")
+            logger.info(f"Using SSL for WebSocket server with cert: {SSL_CERT_FILE}")
         except Exception as e:
-            print(f"Error loading SSL certificates for WebSocket: {e}")
-            print("WebSocket server will run without SSL")
+            logger.error(f"Error loading SSL certificates for WebSocket: {e}")
+            logger.warning("WebSocket server will run without SSL")
 
     # Set proper SSL verification settings
     if ssl_context:
@@ -1412,9 +1450,9 @@ async def run_websocket_server():
             ping_interval=30,
             ping_timeout=60
         )
-        print(f"Non-SSL WebSocket server running on ws://{HOST}:{non_ssl_ws_port}")
+        logger.info(f"Non-SSL WebSocket server running on ws://{HOST}:{non_ssl_ws_port}")
 
-    print(f"WebSocket server running on {'wss' if ssl_context else 'ws'}://{HOST}:{ws_port}")
+    logger.info(f"WebSocket server running on {'wss' if ssl_context else 'ws'}://{HOST}:{ws_port}")
     await stop
 
 
@@ -1442,31 +1480,30 @@ def is_safe_path(base_dir, requested_path):
 
 def create_self_signed_cert():
     """
-    Создает самоподписанный SSL сертификат, если он отсутствует
+    Creates a self-signed SSL certificate if it doesn't exist
     """
     if os.path.exists(SSL_CERT_FILE) and os.path.exists(SSL_KEY_FILE):
-        print(f"Using existing SSL certificate: {SSL_CERT_FILE}")
+        logger.info(f"Using existing SSL certificate: {SSL_CERT_FILE}")
         return
 
-    print("Creating self-signed SSL certificate...")
+    logger.info("Creating self-signed SSL certificate...")
 
-    # Команда для создания самоподписанного сертификата
+    # Command to create self-signed certificate
     cmd = f'openssl req -x509 -newkey rsa:2048 -keyout {SSL_KEY_FILE} -out {SSL_CERT_FILE} ' \
           f'-days 365 -nodes -subj "/CN=localhost"'
 
     try:
         import subprocess
         subprocess.run(cmd, shell=True, check=True)
-        print(f"SSL certificate created: {SSL_CERT_FILE}")
+        logger.info(f"SSL certificate created: {SSL_CERT_FILE}")
     except Exception as e:
-        print(f"Error creating SSL certificate: {e}")
-        print("Please create SSL certificate manually using OpenSSL")
-        print(f"Example: {cmd}")
+        logger.error(f"Error creating SSL certificate: {e}")
+        logger.warning("Please create SSL certificate manually using OpenSSL")
+        logger.warning(f"Example: {cmd}")
 
 
 def main():
-    # Сохраняем существующий код
-    # Инициализируем базу данных при запуске
+    # Initialize protocols and database at startup
     global stream_manager, session_manager, running, ws_port, stream_protocol
 
     # Initialize protocols
@@ -1474,16 +1511,16 @@ def main():
 
     init_database()
 
-    # Создаем SSL сертификат если нужно
+    # Create SSL certificate if needed
     create_self_signed_cert()
 
-    # Создаем HTTP сервер
+    # Create HTTP server
     http_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    # Создаем HTTPS сервер
+    # Create HTTPS server
     https_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    # Оборачиваем сокет в SSL контекст
+    # Wrap socket in SSL context
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     try:
         ssl_context.load_cert_chain(certfile=SSL_CERT_FILE, keyfile=SSL_KEY_FILE)
@@ -1492,8 +1529,8 @@ def main():
         )
         https_enabled = True
     except Exception as e:
-        print(f"Error setting up HTTPS: {e}")
-        print("Running with HTTP only")
+        logger.error(f"Error setting up HTTPS: {e}")
+        logger.warning("Running with HTTP only")
         https_enabled = False
 
     try:
@@ -1502,7 +1539,7 @@ def main():
         tcp_auth_thread.daemon = True
         tcp_auth_thread.start()
 
-        # Запускаем остальные потоки
+        # Start remaining threads
         streamer_thread = threading.Thread(target=streamer_listener)
         streamer_thread.daemon = True
         streamer_thread.start()
@@ -1527,40 +1564,40 @@ def main():
         ws_thread.daemon = True
         ws_thread.start()
 
-        # Настраиваем HTTP сервер
+        # Configure HTTP server
         http_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         http_server_socket.bind((HOST, PORT))
         http_server_socket.listen(5)
-        print(f"HTTP server started on port {PORT}")
+        logger.info(f"HTTP server started on port {PORT}")
 
-        # Настраиваем HTTPS сервер если включен
+        # Configure HTTPS server if enabled
         if https_enabled:
             https_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             https_server_socket.bind((HOST, HTTPS_PORT))
             https_server_socket.listen(5)
-            print(f"HTTPS server started on port {HTTPS_PORT}")
-            print(f"Open browser and go to https://localhost/register.html")
+            logger.info(f"HTTPS server started on port {HTTPS_PORT}")
+            logger.info(f"Open browser and go to https://localhost/register.html")
         else:
-            print(f"Open browser and go to http://localhost/register.html")
+            logger.info(f"Open browser and go to http://localhost/register.html")
 
-        print(f"WebSocket server runs on ports: secure={ws_port}, non-secure={ws_non_ssl_port}")
-        print(f"TCP Authentication server running on port {TCP_AUTH_PORT}")
-        print(f"UDP Streaming server running on port {PORT_UDP}")
+        logger.info(f"WebSocket server runs on ports: secure={ws_port}, non-secure={ws_non_ssl_port}")
+        logger.info(f"TCP Authentication server running on port {TCP_AUTH_PORT}")
+        logger.info(f"UDP Streaming server running on port {PORT_UDP}")
 
-        # Создаем список для отслеживания сокетов
+        # Create list for tracking sockets
         sockets_to_monitor = [http_server_socket]
         if https_enabled:
             sockets_to_monitor.append(https_server_socket)
 
         while running:
-            # Используем select для мониторинга нескольких сокетов
+            # Use select to monitor multiple sockets
             import select
             readable, _, exceptional = select.select(sockets_to_monitor, [], sockets_to_monitor, 1.0)
 
             for s in readable:
                 try:
                     client_socket, addr = s.accept()
-                    # Отдельный поток для обработки запроса
+                    # Separate thread for handling request
                     client_thread = threading.Thread(
                         target=handle_client_request,
                         args=(client_socket, addr, s == https_server_socket)
@@ -1568,20 +1605,20 @@ def main():
                     client_thread.daemon = True
                     client_thread.start()
                 except Exception as e:
-                    print(f"Error accepting connection: {e}")
+                    logger.error(f"Error accepting connection: {e}")
 
             for s in exceptional:
-                print(f"Socket {s} had an exception")
+                logger.error(f"Socket {s} had an exception")
                 sockets_to_monitor.remove(s)
                 s.close()
-                # Если это был один из серверных сокетов, пытаемся пересоздать его
+                # If this was one of the server sockets, try to recreate it
                 if s == http_server_socket:
                     http_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     http_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     http_server_socket.bind((HOST, PORT))
                     http_server_socket.listen(5)
                     sockets_to_monitor.append(http_server_socket)
-                    print(f"HTTP server restarted on port {PORT}")
+                    logger.info(f"HTTP server restarted on port {PORT}")
                 elif https_enabled and s == https_server_socket:
                     https_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     https_server_socket = ssl_context.wrap_socket(
@@ -1591,12 +1628,12 @@ def main():
                     https_server_socket.bind((HOST, HTTPS_PORT))
                     https_server_socket.listen(5)
                     sockets_to_monitor.append(https_server_socket)
-                    print(f"HTTPS server restarted on port {HTTPS_PORT}")
+                    logger.info(f"HTTPS server restarted on port {HTTPS_PORT}")
 
     except socket.error as err:
-        print('Server socket error: ' + str(err))
+        logger.error('Server socket error: ' + str(err))
     except KeyboardInterrupt:
-        print("Server shutting down...")
+        logger.info("Server shutting down...")
         running = False
     finally:
         http_server_socket.close()
@@ -1606,30 +1643,30 @@ def main():
 
 def handle_client_request(client_socket, addr, is_https):
     """
-    Обрабатывает запрос клиента как для HTTP, так и для HTTPS соединений
-    :param client_socket: сокет клиента
-    :param addr: адрес клиента
-    :param is_https: флаг, указывающий, что это HTTPS соединение
+    Processes client requests for both HTTP and HTTPS connections
+    :param client_socket: client socket
+    :param addr: client address
+    :param is_https: flag indicating this is an HTTPS connection
     """
     protocol = "HTTPS" if is_https else "HTTP"
     try:
         client_socket.settimeout(SOCKET_TIMEOUT)
-        print(f"{protocol} connection established with {addr}")
+        logger.info(f"{protocol} connection established with {addr}")
 
         raw_request = receive_all(client_socket)
         if raw_request:
             request = raw_request.decode('utf-8', errors='ignore')
             request_lines = request.split('\r\n')
 
-            # Проверяем на пустой запрос
+            # Check for empty request
             if not request_lines or not request_lines[0]:
-                print("Received empty request")
+                logger.warning("Received empty request")
                 response = request_error
                 client_socket.sendall(response)
                 return
 
             request_split = request_lines[0].split()
-            print(f"Received {protocol} request: {request_lines[0]}")
+            logger.info(f"Received {protocol} request: {request_lines[0]}")
 
             # Check if this is a WebSocket upgrade request
             if len(request_lines) > 1:
@@ -1640,41 +1677,41 @@ def handle_client_request(client_socket, addr, is_https):
                         headers[key.lower()] = value
 
                 if 'upgrade' in headers and headers['upgrade'].lower() == 'websocket':
-                    print(f"WebSocket upgrade request detected via {protocol}")
+                    logger.info(f"WebSocket upgrade request detected via {protocol}")
                     handle_websocket_proxy(client_socket, request, is_https)
                     return
 
-            # Проверяем корректность формата запроса
+            # Check request format validity
             if len(request_split) < 3:
-                print(f"Invalid request format: {request_lines[0]}")
+                logger.warning(f"Invalid request format: {request_lines[0]}")
                 response = request_error
                 client_socket.sendall(response)
                 return
 
-            # Обрабатываем GET запросы
+            # Process GET requests
             if validating_get_request(request_split):
                 if len(request_split) > 1:
                     request_path = request_split[1]
 
-                    # Проверяем наличие параметров запроса
+                    # Check for query parameters
                     path_parts = request_path.split('?', 1)
-                    filename = path_parts[0][1:]  # Удаляем ведущий слеш
+                    filename = path_parts[0][1:]  # Remove leading slash
                     query_string = path_parts[1] if len(path_parts) > 1 else ""
 
                     # Handle WebSocket proxy path
                     if filename == 'ws-proxy':
-                        print("WebSocket proxy path detected")
+                        logger.info("WebSocket proxy path detected")
                         handle_websocket_proxy(client_socket, request, is_https)
                         return
 
                     if filename == '':
-                        filename = 'register.html'  # Начинаем с регистрации
+                        filename = 'register.html'  # Start with registration
 
-                    # Исправляем ссылку в register.html
+                    # Fix link in register.html
                     if filename == 'index.html':
                         filename = 'login.html'
 
-                    # Обрабатываем специальные API запросы
+                    # Process special API requests
                     if filename == 'search':
                         query_params = parse_query_string(query_string)
                         handle_search_request(client_socket, query_params)
@@ -1687,22 +1724,22 @@ def handle_client_request(client_socket, addr, is_https):
                         handle_logout(client_socket, request)
                         return
 
-                    # Проверяем, требуется ли авторизация для доступа к файлу
+                    # Check if authorization is required for file access
                     if filename in protected_pages:
-                        # Получаем имя пользователя из сессии
+                        # Get username from session
                         username = session_manager.get_session_user(request)
                         if not username:
-                            # Если пользователь не авторизован, перенаправляем на страницу входа
+                            # If user is not authorized, redirect to login page
                             response = b"HTTP/1.1 302 Found\r\n"
                             response += b"Location: /login.html\r\n"
                             response += b"Content-Length: 0\r\n"
                             response += b"Connection: close\r\n\r\n"
                             client_socket.sendall(response)
-                            print(f"Redirecting to login: unauthorized access to {filename}")
+                            logger.info(f"Redirecting to login: unauthorized access to {filename}")
                             return
 
                     filepath = os.path.join(SITE_FOLDER, filename)
-                    print(f"Requested file: {filepath}")
+                    logger.debug(f"Requested file: {filepath}")
 
                     if specific(filename):
                         response = searching_url(filename)
@@ -1710,17 +1747,18 @@ def handle_client_request(client_socket, addr, is_https):
                     elif is_safe_path(SITE_FOLDER, filename):
                         serve_file(client_socket, filepath)
                     else:
-                        # Запрос к небезопасному пути - отправляем ошибку 403 Forbidden
+                        # Request to unsafe path - send 403 Forbidden error
                         response = b"HTTP/1.1 403 Forbidden\r\n\r\n<h1>403 Forbidden</h1>"
                         client_socket.sendall(response)
+                        logger.warning(f"Forbidden access attempt to unsafe path: {filename}")
 
-            # Обрабатываем POST запросы
+            # Process POST requests
             elif validating_post_request(request_split):
                 path = request_split[1]
-                print(f"Received {protocol} POST request for path: {path}")
+                logger.info(f"Received {protocol} POST request for path: {path}")
 
                 form_data = parse_post_data(request)
-                print(f"Extracted form data: {form_data}")
+                logger.debug(f"Extracted form data: {form_data}")
 
                 if path == '/register':
                     handle_registration(client_socket, form_data)
@@ -1729,29 +1767,29 @@ def handle_client_request(client_socket, addr, is_https):
                 elif path == '/change-password':
                     handle_change_password(client_socket, form_data, request)
                 else:
-                    print(f"Unknown POST request: {path}")
+                    logger.warning(f"Unknown POST request: {path}")
                     response = request_error
                     client_socket.sendall(response)
             else:
-                print(f"Unsupported request type: {request_split[0]}")
+                logger.warning(f"Unsupported request type: {request_split[0]}")
                 response = request_error
                 client_socket.sendall(response)
         else:
-            print("Received empty request (no data)")
+            logger.warning("Received empty request (no data)")
             response = request_error
             client_socket.sendall(response)
 
     except socket.error as err:
-        print(f'Client socket error ({protocol}): ' + str(err))
+        logger.error(f'Client socket error ({protocol}): {str(err)}')
 
     except Exception as e:
-        print(f"Unhandled exception in {protocol} handler: {e}")
-        # Отправляем 500 Internal Server Error в случае непредвиденных исключений
+        logger.error(f"Unhandled exception in {protocol} handler: {e}")
+        # Send 500 Internal Server Error for unexpected exceptions
         error_response = b"HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/html\r\nContent-Length: 35\r\nConnection: close\r\n\r\n<h1>500 Internal Server Error</h1>"
         try:
             client_socket.sendall(error_response)
         except socket.error as err:
-            print(f'Client socket error during error response ({protocol}): ' + str(err))
+            logger.error(f'Client socket error during error response ({protocol}): {str(err)}')
 
     finally:
         client_socket.close()
@@ -1763,7 +1801,7 @@ def handle_websocket_proxy(client_socket, request, is_https):
     by implementing the WebSocket protocol directly
     """
     protocol = "HTTPS" if is_https else "HTTP"
-    print(f"WebSocket upgrade request detected via {protocol}")
+    logger.info(f"WebSocket upgrade request detected via {protocol}")
 
     # Parse the request to get headers
     request_lines = request.split('\r\n')
@@ -1781,24 +1819,22 @@ def handle_websocket_proxy(client_socket, request, is_https):
         query_params = parse_query_string(query_string)
         if 'streamer' in query_params:
             streamer_name = query_params['streamer'][0]
-            print(f"WebSocket proxy request for streamer: {streamer_name} via {protocol}")
+            logger.info(f"WebSocket proxy request for streamer: {streamer_name} via {protocol}")
 
     # Verify this is a valid WebSocket request
     if 'upgrade' not in headers or headers['upgrade'].lower() != 'websocket':
-        print("Not a valid WebSocket upgrade request")
+        logger.warning("Not a valid WebSocket upgrade request")
         response = b"HTTP/1.1 400 Bad Request\r\n\r\n"
         client_socket.sendall(response)
         return
 
     if 'sec-websocket-key' not in headers:
-        print("WebSocket key missing")
+        logger.warning("WebSocket key missing")
         response = b"HTTP/1.1 400 Bad Request\r\n\r\n"
         client_socket.sendall(response)
         return
 
     # Create the WebSocket accept key
-    import hashlib
-    import base64
     ws_key = headers['sec-websocket-key']
     ws_accept = base64.b64encode(hashlib.sha1(
         f"{ws_key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11".encode()
@@ -1812,7 +1848,7 @@ def handle_websocket_proxy(client_socket, request, is_https):
             b"Sec-WebSocket-Accept: " + ws_accept.encode() + b"\r\n\r\n"
     )
     client_socket.sendall(response)
-    print(f"WebSocket handshake completed via {protocol}")
+    logger.info(f"WebSocket handshake completed via {protocol}")
 
     # Now the connection is a WebSocket connection
     handle_websocket_connection(client_socket, streamer_name)
@@ -1824,7 +1860,7 @@ def handle_websocket_connection(client_socket, streamer_name):
     """
     global ws_clients
 
-    print(f"WebSocket connection established for streamer: {streamer_name}")
+    logger.info(f"WebSocket connection established for streamer: {streamer_name}")
 
     # Register this client
     if streamer_name not in ws_clients:
@@ -1844,12 +1880,11 @@ def handle_websocket_connection(client_socket, streamer_name):
                 message_bytes = message.encode() if isinstance(message, str) else message
 
                 # Create WebSocket frame
-                # For simplicity, we're not handling messages > 65535 bytes
                 length = len(message_bytes)
                 frame = bytearray()
 
                 # First byte: FIN bit (1) + RSV bits (000) + Opcode (0001 for text)
-                frame.append(0x81)  # 10000001 in binary
+                frame.append(0x81)  # 10000001
 
                 # Second byte onwards: MASK bit (0) + Payload length
                 if length < 126:
@@ -1870,7 +1905,7 @@ def handle_websocket_connection(client_socket, streamer_name):
                 self.socket.sendall(frame)
                 return True
             except Exception as err:
-                print(f"Error sending WebSocket message: {err}")
+                logger.error(f"Error sending WebSocket message: {err}")
                 self.closed = True
                 return False
 
@@ -1928,7 +1963,7 @@ def handle_websocket_connection(client_socket, streamer_name):
                 if opcode == 0x1:  # Text frame
                     try:
                         message = payload.decode('utf-8')
-                        print(f"Received text message: {message}")
+                        logger.debug(f"Received text message: {message}")
 
                         # Process message if needed
                         try:
@@ -1942,10 +1977,10 @@ def handle_websocket_connection(client_socket, streamer_name):
                         except json.JSONDecodeError:
                             pass
                     except UnicodeDecodeError:
-                        print("Error decoding message")
+                        logger.error("Error decoding message")
 
                 elif opcode == 0x8:  # Close frame
-                    print("Received close frame")
+                    logger.info("Received close frame")
                     break
 
                 elif opcode == 0x9:  # Ping frame
@@ -1968,11 +2003,11 @@ def handle_websocket_connection(client_socket, streamer_name):
                     break
 
             except Exception as e:
-                print(f"Error reading WebSocket frame: {e}")
+                logger.error(f"Error reading WebSocket frame: {e}")
                 break
 
     except Exception as e:
-        print(f"WebSocket connection error: {e}")
+        logger.error(f"WebSocket connection error: {e}")
 
     finally:
         # Clean up
@@ -1986,7 +2021,7 @@ def handle_websocket_connection(client_socket, streamer_name):
         except:
             pass
 
-        print(f"WebSocket connection closed for streamer: {streamer_name}")
+        logger.info(f"WebSocket connection closed for streamer: {streamer_name}")
 
 
 if __name__ == "__main__":
