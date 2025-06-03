@@ -1,5 +1,6 @@
 """
 Author: Oleg Shkolnik
+Class: יב12
 Description: protocol of streaming and authentication between streamer and server
 Date: 3/06/25
 """
