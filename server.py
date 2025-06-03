@@ -1,5 +1,6 @@
 """
 Author: Oleg Shkolnik
+Class: יב12
 Description: before running the server it's importnant to download ssl from the site https://slproweb.com/products/Win32OpenSSL.html
             and then write this command in the powershell
             & "C:\Program Files\OpenSSL-Win64\bin\openssl.exe" req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"
