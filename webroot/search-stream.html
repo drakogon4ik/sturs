@@ -230,7 +230,6 @@
             </form>
 
             <div class="streamers-list">
-                <!-- Streamers will be displayed here -->
                 <div class="streamer-item">
                     <span class="streamer-name">Streamer1</span>
                     <button class="join-button">Join</button>
@@ -277,7 +276,7 @@
         </div>
     </div>
 
-        <script>
+    <script>
         // WebSocket connection for stream receiving
         let ws = null;
 
@@ -288,7 +287,7 @@
         let audioBuffer = null;
         let isAudioInitialized = false;
         let isMuted = false;
-        let audioGainNode = null; // Добавлена переменная, которая отсутствовала
+        let audioGainNode = null;
 
         // Variables for stream activity monitoring
         let lastDataTimestamp = 0;
@@ -298,13 +297,11 @@
         // Function to check stream activity
         function checkStreamActivity() {
             const currentTime = Date.now();
-            // Only check if we have a valid WebSocket connection
             if (ws && ws.readyState === WebSocket.OPEN) {
                 if (currentTime - lastDataTimestamp > INACTIVITY_TIMEOUT) {
                     console.log('Stream inactive, no data received');
                     document.getElementById('status').textContent = 'Stream inactive - waiting for data...';
 
-                    // Try to reconnect instead of immediately returning to search
                     if (currentTime - lastDataTimestamp > INACTIVITY_TIMEOUT * 2) {
                         alert('Stream ended - no data received');
                         clearInterval(activityCheckInterval);
@@ -321,12 +318,10 @@
                     window.AudioContext = window.AudioContext || window.webkitAudioContext;
                     audioContext = new AudioContext();
 
-                    // If context is suspended (browser policy), try to resume
                     if (audioContext.state === 'suspended') {
                         audioContext.resume();
                     }
 
-                    // Set up volume
                     audioGainNode = audioContext.createGain();
                     audioGainNode.gain.value = document.getElementById('volume-slider').value;
                     audioGainNode.connect(audioContext.destination);
@@ -347,7 +342,6 @@
 
             if (!isAudioInitialized || isMuted) return;
 
-            // Проверяем состояние контекста и пытаемся восстановить
             if (audioContext && audioContext.state !== 'running') {
                 console.log('Audio context not running, attempting resume');
                 audioContext.resume().catch(e => console.error('Error resuming audio context:', e));
@@ -367,7 +361,7 @@
                 // Assume data is in PCM 16-bit Little Endian format
                 // with sampling rate of 44100Hz and 1 channel (mono)
                 const frameCount = view.length / 2; // 16 bits = 2 bytes per sample
-                const sampleRate = 44100; // Specify correct value from server
+                const sampleRate = 44100;
                 const audioBuffer = audioContext.createBuffer(1, frameCount, sampleRate);
                 const channelData = audioBuffer.getChannelData(0);
 
@@ -387,7 +381,6 @@
                 source.connect(audioGainNode);
                 source.start(0);
 
-                // Save for possible disconnection later
                 audioSource = source;
 
             } catch (error) {
@@ -395,10 +388,8 @@
             }
         }
 
-
         // Function to connect to stream via WebSocket
         function connectToStream(streamerName) {
-            // Close previous connection if exists
             if (ws) {
                 ws.close();
             }
@@ -407,36 +398,24 @@
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsPath = '/ws-proxy';
 
-            // Define WebSocket URL based on the protocol
             let wsUrl;
             if (window.location.protocol === 'https:') {
-                // For HTTPS pages, use the same port or the dedicated secure WebSocket port
                 wsUrl = `${wsProtocol}//${host}${wsPath}?streamer=${encodeURIComponent(streamerName)}`;
             } else {
-                // For HTTP, we have two options:
-                // 1. Use the dedicated WebSocket port
-                // 2. Use the WebSocket proxy through the HTTP server
-
-                // First try with WebSocket proxy through current port
                 wsUrl = `${wsProtocol}//${host}${wsPath}?streamer=${encodeURIComponent(streamerName)}`;
             }
 
             console.log(`Connecting to WebSocket: ${wsUrl}`);
 
             try {
-                // Create WebSocket connection
                 ws = new WebSocket(wsUrl);
-
-                // Setup connection handlers
                 setupWebSocketHandlers(ws, streamerName);
 
-                // Add error fallback for HTTP connections
                 if (window.location.protocol === 'http:') {
                     ws.addEventListener('error', (error) => {
                         console.warn('Error with primary WebSocket connection, trying fallback port');
 
-                        // Try fallback to explicit non-SSL WebSocket port (ws_port + 1)
-                        const fallbackPort = 8766; // ws_port + 1 (assuming default ws_port is 8765)
+                        const fallbackPort = 8766;
                         const fallbackUrl = `ws://${host}:${fallbackPort}${wsPath}?streamer=${encodeURIComponent(streamerName)}`;
 
                         console.log(`Connecting to fallback WebSocket: ${fallbackUrl}`);
@@ -455,12 +434,10 @@
 
         // Function to set up WebSocket handlers
         function setupWebSocketHandlers(websocket, streamerName) {
-            // Connection open handler
             websocket.onopen = function() {
                 console.log(`WebSocket connection established for ${streamerName}`);
                 document.getElementById('status').textContent = `Connected to ${streamerName}'s stream`;
 
-                // Send streamer name after connection is established
                 const initMessage = JSON.stringify({
                     action: 'join',
                     streamer: streamerName
@@ -468,17 +445,13 @@
                 websocket.send(initMessage);
                 console.log('Sent join message:', initMessage);
 
-                // Initialize audio on connection
                 initAudioContext();
             };
 
-            // Message handler
             websocket.onmessage = function(evt) {
                 try {
-                    // Update last data timestamp
                     lastDataTimestamp = Date.now();
 
-                    // Try parsing as JSON
                     let message;
                     try {
                         message = JSON.parse(evt.data);
@@ -491,7 +464,6 @@
 
                     switch (message.type) {
                         case 'video':
-                            // Update image on page
                             const videoElement = document.getElementById('stream-image');
                             if (videoElement && message.data) {
                                 videoElement.src = `data:image/jpeg;base64,${message.data}`;
@@ -502,7 +474,6 @@
                             break;
 
                         case 'audio':
-                            // Process audio data
                             if (message.data) {
                                 processAudioData(message.data);
                             } else {
@@ -511,7 +482,6 @@
                             break;
 
                         case 'audio_init':
-                            // Initialize audio context when server signals it's ready
                             console.log('Audio initialization signal received');
                             initAudioContext();
                             document.getElementById('status').textContent = 'Audio initialized';
@@ -535,24 +505,20 @@
                 }
             };
 
-            // Error handler
             websocket.onerror = function(error) {
                 console.error('WebSocket error:', error);
                 document.getElementById('status').textContent = 'Connection error';
             };
 
-            // Connection close handler
             websocket.onclose = function(event) {
                 console.log(`WebSocket connection closed: ${event.code} ${event.reason}`);
                 document.getElementById('status').textContent = 'Connection closed';
 
-                // Don't automatically return to search if connection was closed unexpectedly
                 if (event.code !== 1000) {
                     console.log('Unexpected connection close');
                 }
             };
 
-            // Periodically send ping to keep connection alive
             const pingInterval = setInterval(() => {
                 if (websocket && websocket.readyState === WebSocket.OPEN) {
                     websocket.send(JSON.stringify({ action: 'ping' }));
@@ -564,34 +530,28 @@
 
         // Function to handle search result and start stream
         function joinStream(streamerName) {
-            // Show stream interface immediately
             document.getElementById('search-interface').style.display = 'none';
             document.getElementById('stream-interface').style.display = 'block';
             document.getElementById('streamer-name').textContent = streamerName;
             document.getElementById('status').textContent = 'Connecting...';
 
-            // Initialize activity checking
             lastDataTimestamp = Date.now();
             if (activityCheckInterval) {
                 clearInterval(activityCheckInterval);
             }
             activityCheckInterval = setInterval(checkStreamActivity, 2000);
 
-            // Убедимся, что аудиоконтекст сброшен перед подключением
             if (audioContext) {
                 audioContext.close().then(() => {
                     audioContext = null;
                     isAudioInitialized = false;
                     console.log('Audio context reset before new connection');
-                    // Продолжаем проверку и подключение после сброса аудио
                     checkAndConnectToStream(streamerName);
                 }).catch(e => {
                     console.error('Error closing audio context:', e);
-                    // В случае ошибки всё равно продолжаем
                     checkAndConnectToStream(streamerName);
                 });
             } else {
-                // Если контекста нет, сразу проверяем и подключаемся
                 checkAndConnectToStream(streamerName);
             }
         }
@@ -603,13 +563,11 @@
                 ws = null;
             }
 
-            // Stop activity checking
             if (activityCheckInterval) {
                 clearInterval(activityCheckInterval);
                 activityCheckInterval = null;
             }
 
-            // Clean up audio resources
             if (audioContext && audioSource) {
                 try {
                     audioSource.stop();
@@ -619,7 +577,6 @@
                 }
             }
 
-            // Полностью закрыть и сбросить аудиоконтекст
             if (audioContext) {
                 audioContext.close().then(() => {
                     audioContext = null;
@@ -628,7 +585,6 @@
                 }).catch(e => console.error('Error closing audio context:', e));
             }
 
-            // Clear queue
             audioQueue = [];
 
             document.getElementById('stream-interface').style.display = 'none';
@@ -636,7 +592,6 @@
         }
 
         function checkAndConnectToStream(streamerName) {
-            // Check stream availability via HTTPS fetch first
             fetch(`/join-stream?streamer=${encodeURIComponent(streamerName)}`)
                 .then(response => {
                     if (!response.ok) {
@@ -647,20 +602,16 @@
                 .then(data => {
                     if (!data.active || !data.exists) {
                         alert(data.exists ? 'Stream is not active' : 'User does not exist');
-                        // Return to search if stream is unavailable
                         returnToSearch();
                         return false;
                     }
 
-                    // Now connect to stream via WebSocket if stream is available
                     console.log('Stream available, connecting to WebSocket');
                     return connectToStream(streamerName);
                 })
                 .catch(error => {
                     console.error('Error checking stream availability:', error);
                     document.getElementById('status').textContent = 'Failed to check stream availability';
-
-                    // Try connecting anyway - the server might still accept the WebSocket connection
                     return connectToStream(streamerName);
                 });
         }
@@ -670,7 +621,6 @@
             event.preventDefault();
             const searchTerm = document.getElementById('streamer-search').value;
 
-            // Send request to server
             fetch(`/search?term=${encodeURIComponent(searchTerm)}`)
                 .then(response => response.json())
                 .then(data => {
@@ -763,13 +713,11 @@
         });
 
         // Initialize audio context on user click
-        // (necessary for browsers requiring user interaction)
         document.addEventListener('click', function() {
             if (!isAudioInitialized) {
                 initAudioContext();
             }
 
-            // If context exists and is suspended, resume it
             if (audioContext && audioContext.state === 'suspended') {
                 audioContext.resume();
             }
